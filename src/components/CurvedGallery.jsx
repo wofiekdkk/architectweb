@@ -1,157 +1,175 @@
-import { useRef, useEffect, useState } from "react";
-import { motion, useMotionValue, useSpring } from "framer-motion";
+import { useRef, useEffect, useState, useLayoutEffect } from "react";
+import { motion, useMotionValue, useTransform, useSpring } from "framer-motion";
 import { projects } from "../data/projects";
 
 export default function CurvedGallery() {
-  const viewportRef = useRef(null);
-  const trackRef = useRef(null);
-  const [dragLimits, setDragLimits] = useState({ left: 0, right: 0 });
-  const [cardW, setCardW] = useState(320);
+  const containerRef = useRef(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [cardWidth, setCardWidth] = useState(260);
 
   const x = useMotionValue(0);
-  const springX = useSpring(x, { stiffness: 140, damping: 26, mass: 0.55 });
+  // Ultra-snappy spring for touch momentum
+  const smoothX = useSpring(x, { stiffness: 400, damping: 32, mass: 0.8 });
 
-  // Measure cards + set drag bounds so first/last never sit half off-screen
-  useEffect(() => {
-    const measure = () => {
-      if (!viewportRef.current || !trackRef.current) return;
+  const gap = 16; // spacing between cards
 
-      const vw = viewportRef.current.offsetWidth;
-      const isMobile = vw < 768;
+  useLayoutEffect(() => {
+    const updateSizes = () => {
+      if (!containerRef.current) return;
+      const vw = containerRef.current.offsetWidth;
+      setViewportWidth(vw);
 
-      // Card width roughly matches reference proportions
-      const nextCardW = isMobile
-        ? Math.min(300, vw * 0.72)
-        : Math.min(340, vw * 0.26);
-
-      setCardW(nextCardW);
-
-      // Let layout settle then measure full track
-      requestAnimationFrame(() => {
-        if (!trackRef.current || !viewportRef.current) return;
-        const trackWidth = trackRef.current.scrollWidth;
-        const viewWidth = viewportRef.current.offsetWidth;
-        const maxDrag = Math.max(0, trackWidth - viewWidth);
-        setDragLimits({ left: -maxDrag, right: 0 });
-      });
+      // Responsive card sizing
+      if (vw < 640) {
+        setCardWidth(Math.min(vw * 0.68, 250)); // Mobile: peek left/right cards
+      } else if (vw < 1024) {
+        setCardWidth(280);
+      } else {
+        setCardWidth(320); // Desktop
+      }
     };
 
-    measure();
-    const t = setTimeout(measure, 350);
-    window.addEventListener("resize", measure);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("resize", measure);
-    };
+    updateSizes();
+    window.addEventListener("resize", updateSizes);
+    return () => window.removeEventListener("resize", updateSizes);
   }, []);
 
-  const gap = 14; // px between frames — close like the reference
+  // Calculate start padding so the 1st card rests perfectly aligned without slicing
+  const sidePadding = Math.max(20, (viewportWidth - cardWidth) / 2);
+  const totalTrackWidth = projects.length * cardWidth + (projects.length - 1) * gap;
+  const maxScroll = Math.max(0, totalTrackWidth - (viewportWidth - sidePadding * 2));
 
   return (
-    <div className="relative w-full select-none py-6 md:py-10">
-      {/* Outer viewport */}
+    <div className="relative w-full py-8 md:py-12 select-none overflow-hidden">
+      {/* Side gradient overlays for seamless fading */}
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-30 w-8 md:w-20 bg-gradient-to-r from-[#fafafa] via-[#fafafa]/80 to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 z-30 w-8 md:w-20 bg-gradient-to-l from-[#fafafa] via-[#fafafa]/80 to-transparent" />
+
       <div
-        ref={viewportRef}
-        className="relative w-full overflow-hidden cursor-grab active:cursor-grabbing"
+        ref={containerRef}
+        className="w-full overflow-hidden touch-pan-y"
         style={{
-          perspective: "1200px",
-          perspectiveOrigin: "50% 45%",
+          perspective: "1000px",
+          perspectiveOrigin: "50% 50%",
         }}
       >
-        {/* Soft side fades (keeps edges elegant, never harsh crop) */}
-        <div className="pointer-events-none absolute inset-y-0 left-0 z-30 w-10 md:w-20 bg-gradient-to-r from-[#fafafa] via-[#fafafa]/80 to-transparent" />
-        <div className="pointer-events-none absolute inset-y-0 right-0 z-30 w-10 md:w-20 bg-gradient-to-l from-[#fafafa] via-[#fafafa]/80 to-transparent" />
-
-        {/* 3D track */}
         <motion.div
-          ref={trackRef}
           drag="x"
-          dragConstraints={dragLimits}
-          dragElastic={0.12}
-          dragTransition={{ power: 0.25, timeConstant: 350 }}
-          style={{
-            x: springX,
-            transformStyle: "preserve-3d",
-          }}
-          className="flex items-center py-8 md:py-12"
-          onDrag={(_, info) => {
-            x.set(x.get() + info.delta.x);
-          }}
+          dragConstraints={{ left: -maxScroll, right: 0 }}
+          dragElastic={0.15}
+          dragTransition={{ power: 0.2, timeConstant: 200 }}
+          style={{ x }}
+          className="flex items-center cursor-grab active:cursor-grabbing py-6 md:py-10"
         >
-          {/* Leading spacer so first card starts fully on-screen */}
-          <div className="shrink-0" style={{ width: "max(16px, 6vw)" }} />
+          {/* Start padding spacer */}
+          <div className="shrink-0" style={{ width: sidePadding }} />
 
-          {projects.map((project, i) => {
-            // Cylinder math — gentle like the reference (not extreme)
-            // Center of the strip is flattest; edges rotate away
-            const mid = (projects.length - 1) / 2;
-            const offset = i - mid;
+          {projects.map((project, i) => (
+            <CardItem
+              key={project.id}
+              project={project}
+              index={i}
+              x={smoothX}
+              cardWidth={cardWidth}
+              gap={gap}
+              viewportWidth={viewportWidth}
+              sidePadding={sidePadding}
+            />
+          ))}
 
-            // Reference-style gentle curve
-            const rotateY = offset * -11;          // degrees
-            const translateZ = -Math.abs(offset) * 38;
-            const translateY = Math.abs(offset) * 6;
-
-            return (
-              <div
-                key={project.id}
-                className="shrink-0"
-                style={{
-                  width: cardW,
-                  marginRight: i === projects.length - 1 ? 0 : gap,
-                  transform: `translateY(${translateY}px) translateZ(${translateZ}px) rotateY(${rotateY}deg)`,
-                  transformStyle: "preserve-3d",
-                }}
-              >
-                <div
-                  className="relative overflow-hidden bg-gray-200 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.35)]"
-                  style={{
-                    width: cardW,
-                    height: cardW * 1.35,
-                    borderRadius: 2,
-                  }}
-                >
-                  <img
-                    src={project.image}
-                    alt={project.title}
-                    draggable={false}
-                    loading="lazy"
-                    className="h-full w-full object-cover pointer-events-none"
-                  />
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Trailing spacer so last card can rest fully on-screen */}
-          <div className="shrink-0" style={{ width: "max(16px, 6vw)" }} />
+          {/* End padding spacer */}
+          <div className="shrink-0" style={{ width: sidePadding }} />
         </motion.div>
       </div>
 
-      {/* Curved white "bowl" shadow under the strip — matches reference */}
+      {/* Curved Shadow Base - matching reference design */}
       <div className="pointer-events-none relative z-10 -mt-6 md:-mt-8 flex justify-center">
         <div
-          className="h-10 md:h-14 w-[94%] max-w-5xl"
+          className="h-8 md:h-12 w-[90%] max-w-4xl"
           style={{
             background:
-              "radial-gradient(ellipse 80% 100% at 50% 0%, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.04) 40%, transparent 72%)",
+              "radial-gradient(ellipse 80% 100% at 50% 0%, rgba(0,0,0,0.12) 0%, rgba(0,0,0,0.03) 50%, transparent 80%)",
             borderRadius: "50%",
-            filter: "blur(2px)",
+            filter: "blur(3px)",
           }}
         />
       </div>
 
-      {/* Drag / swipe hint */}
-      <div className="mt-2 flex justify-center md:mt-0">
-        <div className="hidden items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-gray-400 md:flex">
-          <span>Drag</span>
-          <span className="h-px w-6 bg-gray-300" />
-          <span>Explore</span>
-        </div>
-        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-gray-400 md:hidden">
+      {/* Touch/Swipe indicator */}
+      <div className="mt-2 flex justify-center">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-gray-400">
           Swipe to explore
         </p>
       </div>
     </div>
+  );
+}
+
+function CardItem({ project, index, x, cardWidth, gap, viewportWidth, sidePadding }) {
+  // Base X position of this card relative to the track start
+  const cardOffset = index * (cardWidth + gap);
+
+  // Calculate rotation & Z-depth dynamically as you swipe!
+  const rotateY = useTransform(x, (currentX) => {
+    if (!viewportWidth) return 0;
+    // Current center of this card on screen
+    const cardCenter = sidePadding + cardOffset + cardWidth / 2 + currentX;
+    const screenCenter = viewportWidth / 2;
+    const diff = cardCenter - screenCenter;
+    
+    // Normalize distance (-1 to 1)
+    const norm = Math.max(-1, Math.min(1, diff / (cardWidth * 2)));
+    return norm * -16; // 16deg maximum curve angle like the reference
+  });
+
+  const translateZ = useTransform(x, (currentX) => {
+    if (!viewportWidth) return 0;
+    const cardCenter = sidePadding + cardOffset + cardWidth / 2 + currentX;
+    const screenCenter = viewportWidth / 2;
+    const diff = Math.abs(cardCenter - screenCenter);
+    
+    const norm = Math.min(1, diff / (cardWidth * 2));
+    return -norm * 45; // Depth curve receding back
+  });
+
+  const translateY = useTransform(x, (currentX) => {
+    if (!viewportWidth) return 0;
+    const cardCenter = sidePadding + cardOffset + cardWidth / 2 + currentX;
+    const screenCenter = viewportWidth / 2;
+    const diff = Math.abs(cardCenter - screenCenter);
+    
+    const norm = Math.min(1, diff / (cardWidth * 2));
+    return norm * 8; // Gentle arc bowl effect
+  });
+
+  return (
+    <motion.div
+      className="shrink-0"
+      style={{
+        width: cardWidth,
+        marginRight: gap,
+        rotateY,
+        translateZ,
+        y: translateY,
+        transformStyle: "preserve-3d",
+      }}
+    >
+      <div
+        className="relative overflow-hidden bg-gray-200 shadow-xl"
+        style={{
+          width: cardWidth,
+          height: cardWidth * 1.35,
+          borderRadius: "3px",
+        }}
+      >
+        <img
+          src={project.image}
+          alt={project.title}
+          draggable={false}
+          loading="lazy"
+          className="h-full w-full object-cover pointer-events-none"
+        />
+      </div>
+    </motion.div>
   );
 }
